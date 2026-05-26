@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { buildJson, buildMarkdown, buildPrompt, buildText, download } from './exporters';
+import { buildDetailedMarkdown, buildJson, buildMarkdown, buildPrompt, buildText, download } from './exporters';
 import { analyzeSession } from './metrics';
 import { detectPose, drawPose, initPoseLandmarker } from './pose';
 import { TASKS } from './protocol';
@@ -251,6 +251,7 @@ export default function App() {
   };
 
   const exportMd = () => download(buildMarkdown(analysis, captures, settings), 'md');
+  const exportDetail = () => download(buildDetailedMarkdown(analysis, captures, settings), 'md', 'posture_motion_lab_detail');
   const exportTxt = () => download(buildText(analysis, captures, settings), 'txt');
   const exportJson = () => download(buildJson(analysis, captures, settings), 'json');
   const exportPrompt = () => download(buildPrompt(analysis, captures, settings), 'md', 'posture_motion_lab_prompt');
@@ -394,11 +395,12 @@ export default function App() {
             <h2>書き出し</h2>
             <div className="exportGrid">
               <button type="button" disabled={!hasCaptures} onClick={exportMd}>md</button>
+              <button type="button" disabled={!hasCaptures} onClick={exportDetail}>detail</button>
               <button type="button" disabled={!hasCaptures} onClick={exportTxt}>txt</button>
               <button type="button" disabled={!hasCaptures} onClick={exportJson}>json</button>
               <button type="button" disabled={!hasCaptures} onClick={exportPrompt}>prompt</button>
             </div>
-            <p className="exportHint">AIへ送るなら、まずpromptを使う。詳細検証にはjsonも添える。</p>
+            <p className="exportHint">AIへ送るならprompt。フレーム別数値だけ見たい時はdetail。raw landmark検証はjson。</p>
             <button className="subtle" type="button" disabled={!hasCaptures} onClick={clearSession}>
               セッションリセット
             </button>

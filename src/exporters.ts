@@ -1,5 +1,87 @@
 import { PROTOCOL_VERSION } from './protocol';
-import type { AppSettings, SessionAnalysis, TaskCapture, TaskId } from './types';
+import type { AppSettings, PoseFrame, PosePoint, SessionAnalysis, TaskCapture, TaskId } from './types';
+
+const IDX = {
+  nose: 0,
+  leftEar: 7,
+  rightEar: 8,
+  leftShoulder: 11,
+  rightShoulder: 12,
+  leftHip: 23,
+  rightHip: 24,
+  leftKnee: 25,
+  rightKnee: 26,
+  leftAnkle: 27,
+  rightAnkle: 28,
+  leftHeel: 29,
+  rightHeel: 30,
+  leftFoot: 31,
+  rightFoot: 32,
+};
+
+const DETAIL_HEADERS = [
+  'frame',
+  't_sec',
+  'required_confidence',
+  'nose_v',
+  'left_ear_v',
+  'right_ear_v',
+  'left_shoulder_v',
+  'right_shoulder_v',
+  'left_hip_v',
+  'right_hip_v',
+  'left_knee_v',
+  'right_knee_v',
+  'left_ankle_v',
+  'right_ankle_v',
+  'side_used',
+  'head_tilt_deg',
+  'shoulder_height_diff_ratio',
+  'pelvis_height_diff_ratio',
+  'trunk_lean_deg',
+  'craniovertebral_angle_deg',
+  'head_forward_ratio',
+  'left_knee_angle_deg',
+  'right_knee_angle_deg',
+  'left_fppa_deg',
+  'right_fppa_deg',
+  'pelvis_x',
+  'pelvis_y',
+  'left_knee_x',
+  'right_knee_x',
+  'left_knee_y',
+  'right_knee_y',
+  'left_ankle_x',
+  'right_ankle_x',
+  'left_heel_y',
+  'right_heel_y',
+  'foot_width_ratio',
+  'torso_scale',
+];
+
+const REQUIRED_STATIC = [
+  IDX.leftEar,
+  IDX.rightEar,
+  IDX.leftShoulder,
+  IDX.rightShoulder,
+  IDX.leftHip,
+  IDX.rightHip,
+  IDX.leftKnee,
+  IDX.rightKnee,
+  IDX.leftAnkle,
+  IDX.rightAnkle,
+];
+
+const REQUIRED_DYNAMIC = [
+  IDX.leftShoulder,
+  IDX.rightShoulder,
+  IDX.leftHip,
+  IDX.rightHip,
+  IDX.leftKnee,
+  IDX.rightKnee,
+  IDX.leftAnkle,
+  IDX.rightAnkle,
+];
 
 function dateStamp() {
   const now = new Date();
@@ -13,6 +95,195 @@ function dateStamp() {
 
 function valueLine(label: string, value: number | string, unit?: string) {
   return `- ${label}: ${value}${unit ? ` ${unit}` : ''}`;
+}
+
+function deg(rad: number) {
+  return (rad * 180) / Math.PI;
+}
+
+function fmt(value: number | string | null | undefined, digits = 5) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (!Number.isFinite(value)) return '';
+  return value.toFixed(digits);
+}
+
+function point(frame: PoseFrame, index: number) {
+  return frame.landmarks[index];
+}
+
+function visibility(frame: PoseFrame, index: number) {
+  return point(frame, index)?.visibility ?? null;
+}
+
+function visible(lm: PosePoint | undefined, threshold = 0.5) {
+  return Boolean(lm) && (lm?.visibility == null || lm.visibility >= threshold);
+}
+
+function frameConfidence(frame: PoseFrame, required: number[]) {
+  const passed = required.filter((index) => visible(point(frame, index), 0.5)).length;
+  return required.length > 0 ? passed / required.length : 0;
+}
+
+function distance(a: PosePoint, b: PosePoint) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function mid(a: PosePoint, b: PosePoint): PosePoint {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+    z: (a.z + b.z) / 2,
+    visibility: undefined,
+  };
+}
+
+function angle3(a: PosePoint | undefined, b: PosePoint | undefined, c: PosePoint | undefined) {
+  if (!a || !b || !c) return null;
+  const ba = { x: a.x - b.x, y: a.y - b.y };
+  const bc = { x: c.x - b.x, y: c.y - b.y };
+  const dot = ba.x * bc.x + ba.y * bc.y;
+  const magBA = Math.hypot(ba.x, ba.y);
+  const magBC = Math.hypot(bc.x, bc.y);
+  if (magBA === 0 || magBC === 0) return null;
+  const cosine = Math.max(-1, Math.min(1, dot / (magBA * magBC)));
+  return deg(Math.acos(cosine));
+}
+
+function shoulderWidth(frame: PoseFrame) {
+  const lShoulder = point(frame, IDX.leftShoulder);
+  const rShoulder = point(frame, IDX.rightShoulder);
+  if (!lShoulder || !rShoulder) return null;
+  return distance(lShoulder, rShoulder);
+}
+
+function torsoScale(frame: PoseFrame) {
+  const lShoulder = point(frame, IDX.leftShoulder);
+  const rShoulder = point(frame, IDX.rightShoulder);
+  const lHip = point(frame, IDX.leftHip);
+  const rHip = point(frame, IDX.rightHip);
+  if (!lShoulder || !rShoulder || !lHip || !rHip) return null;
+  return distance(mid(lShoulder, rShoulder), mid(lHip, rHip));
+}
+
+function pelvisCenter(frame: PoseFrame) {
+  const lHip = point(frame, IDX.leftHip);
+  const rHip = point(frame, IDX.rightHip);
+  if (!lHip || !rHip) return null;
+  return mid(lHip, rHip);
+}
+
+function trunkLean(frame: PoseFrame) {
+  const lShoulder = point(frame, IDX.leftShoulder);
+  const rShoulder = point(frame, IDX.rightShoulder);
+  const lHip = point(frame, IDX.leftHip);
+  const rHip = point(frame, IDX.rightHip);
+  if (!lShoulder || !rShoulder || !lHip || !rHip) return null;
+  const shoulder = mid(lShoulder, rShoulder);
+  const hip = mid(lHip, rHip);
+  return deg(Math.atan2(shoulder.x - hip.x, hip.y - shoulder.y));
+}
+
+function fppa(frame: PoseFrame, side: 'left' | 'right') {
+  const hip = point(frame, side === 'left' ? IDX.leftHip : IDX.rightHip);
+  const knee = point(frame, side === 'left' ? IDX.leftKnee : IDX.rightKnee);
+  const ankle = point(frame, side === 'left' ? IDX.leftAnkle : IDX.rightAnkle);
+  const angle = angle3(hip, knee, ankle);
+  return angle == null ? null : Math.abs(180 - angle);
+}
+
+function sideChoice(frame: PoseFrame) {
+  const leftScore = frameConfidence(frame, [IDX.leftEar, IDX.leftShoulder, IDX.leftHip, IDX.leftKnee, IDX.leftAnkle]);
+  const rightScore = frameConfidence(frame, [IDX.rightEar, IDX.rightShoulder, IDX.rightHip, IDX.rightKnee, IDX.rightAnkle]);
+  return leftScore >= rightScore ? 'left' : 'right';
+}
+
+function frameDetailRow(taskId: TaskId, frame: PoseFrame, index: number) {
+  const width = shoulderWidth(frame);
+  const torso = torsoScale(frame);
+  const pelvis = pelvisCenter(frame);
+  const side = sideChoice(frame);
+  const ear = point(frame, side === 'left' ? IDX.leftEar : IDX.rightEar);
+  const shoulder = point(frame, side === 'left' ? IDX.leftShoulder : IDX.rightShoulder);
+  const hip = point(frame, side === 'left' ? IDX.leftHip : IDX.rightHip);
+  const knee = point(frame, side === 'left' ? IDX.leftKnee : IDX.rightKnee);
+  const ankle = point(frame, side === 'left' ? IDX.leftAnkle : IDX.rightAnkle);
+  const lEar = point(frame, IDX.leftEar);
+  const rEar = point(frame, IDX.rightEar);
+  const lShoulder = point(frame, IDX.leftShoulder);
+  const rShoulder = point(frame, IDX.rightShoulder);
+  const lHip = point(frame, IDX.leftHip);
+  const rHip = point(frame, IDX.rightHip);
+  const lAnkle = point(frame, IDX.leftAnkle);
+  const rAnkle = point(frame, IDX.rightAnkle);
+
+  const headTilt = lEar && rEar ? deg(Math.atan2(lEar.y - rEar.y, rEar.x - lEar.x)) : null;
+  const shoulderDiff = lShoulder && rShoulder && width ? (lShoulder.y - rShoulder.y) / width : null;
+  const pelvisDiff = lHip && rHip && width ? (lHip.y - rHip.y) / width : null;
+  const cva = ear && shoulder ? deg(Math.atan2(shoulder.y - ear.y, Math.abs(ear.x - shoulder.x))) : null;
+  const headForward = ear && shoulder && hip && torso ? Math.abs(ear.x - shoulder.x) / torso : null;
+  const required = taskId === 'sit_to_stand' || taskId === 'squat' ? REQUIRED_DYNAMIC : REQUIRED_STATIC;
+  const footWidth = lAnkle && rAnkle && width ? distance(lAnkle, rAnkle) / width : null;
+
+  const row: Record<string, string> = {
+    frame: String(index),
+    t_sec: fmt(frame.t, 4),
+    required_confidence: fmt(frameConfidence(frame, required), 3),
+    nose_v: fmt(visibility(frame, IDX.nose), 3),
+    left_ear_v: fmt(visibility(frame, IDX.leftEar), 3),
+    right_ear_v: fmt(visibility(frame, IDX.rightEar), 3),
+    left_shoulder_v: fmt(visibility(frame, IDX.leftShoulder), 3),
+    right_shoulder_v: fmt(visibility(frame, IDX.rightShoulder), 3),
+    left_hip_v: fmt(visibility(frame, IDX.leftHip), 3),
+    right_hip_v: fmt(visibility(frame, IDX.rightHip), 3),
+    left_knee_v: fmt(visibility(frame, IDX.leftKnee), 3),
+    right_knee_v: fmt(visibility(frame, IDX.rightKnee), 3),
+    left_ankle_v: fmt(visibility(frame, IDX.leftAnkle), 3),
+    right_ankle_v: fmt(visibility(frame, IDX.rightAnkle), 3),
+    side_used: taskId === 'side_static' ? side : '',
+    head_tilt_deg: fmt(headTilt),
+    shoulder_height_diff_ratio: fmt(shoulderDiff),
+    pelvis_height_diff_ratio: fmt(pelvisDiff),
+    trunk_lean_deg: fmt(trunkLean(frame)),
+    craniovertebral_angle_deg: fmt(cva),
+    head_forward_ratio: fmt(headForward),
+    left_knee_angle_deg: fmt(angle3(point(frame, IDX.leftHip), point(frame, IDX.leftKnee), point(frame, IDX.leftAnkle))),
+    right_knee_angle_deg: fmt(angle3(point(frame, IDX.rightHip), point(frame, IDX.rightKnee), point(frame, IDX.rightAnkle))),
+    left_fppa_deg: fmt(fppa(frame, 'left')),
+    right_fppa_deg: fmt(fppa(frame, 'right')),
+    pelvis_x: fmt(pelvis?.x),
+    pelvis_y: fmt(pelvis?.y),
+    left_knee_x: fmt(point(frame, IDX.leftKnee)?.x),
+    right_knee_x: fmt(point(frame, IDX.rightKnee)?.x),
+    left_knee_y: fmt(point(frame, IDX.leftKnee)?.y),
+    right_knee_y: fmt(point(frame, IDX.rightKnee)?.y),
+    left_ankle_x: fmt(point(frame, IDX.leftAnkle)?.x),
+    right_ankle_x: fmt(point(frame, IDX.rightAnkle)?.x),
+    left_heel_y: fmt(point(frame, IDX.leftHeel)?.y),
+    right_heel_y: fmt(point(frame, IDX.rightHeel)?.y),
+    foot_width_ratio: fmt(footWidth),
+    torso_scale: fmt(torso),
+  };
+
+  if (taskId !== 'side_static') {
+    row.craniovertebral_angle_deg = '';
+    row.head_forward_ratio = '';
+    row.side_used = '';
+  }
+  return row;
+}
+
+function csvEscape(value: string) {
+  return /[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+}
+
+function frameCsv(taskId: TaskId, frames: PoseFrame[]) {
+  const lines = [DETAIL_HEADERS.join(',')];
+  frames.forEach((frame, index) => {
+    const row = frameDetailRow(taskId, frame, index);
+    lines.push(DETAIL_HEADERS.map((header) => csvEscape(row[header] ?? '')).join(','));
+  });
+  return lines.join('\n');
 }
 
 export function buildMarkdown(
@@ -106,6 +377,33 @@ export function buildText(
   return lines.join('\n');
 }
 
+export function buildDetailedMarkdown(
+  analysis: SessionAnalysis,
+  captures: Partial<Record<TaskId, TaskCapture>>,
+  settings: AppSettings,
+) {
+  const lines = [buildMarkdown(analysis, captures, settings)];
+  lines.push('');
+  lines.push('## フレーム別詳細');
+  lines.push('');
+  lines.push('- 各タスクの全フレームをCSVとして出力する');
+  lines.push('- required_confidenceは、そのタスクで必要な主要ランドマークが見えていた割合');
+  lines.push('- visibility列はMediaPipeのランドマーク信頼度');
+  lines.push('- ratioは画像座標または肩幅・体幹長で正規化した相対値');
+  lines.push('- 品質Cまたは測定不能のフレーム列は、原因確認用であり強い解釈には使わない');
+
+  Object.entries(captures).forEach(([taskId, capture]) => {
+    lines.push('');
+    lines.push(`### ${capture.label}`);
+    lines.push('');
+    lines.push('```csv');
+    lines.push(frameCsv(taskId as TaskId, capture.frames));
+    lines.push('```');
+  });
+
+  return lines.join('\n');
+}
+
 export function buildJson(
   analysis: SessionAnalysis,
   captures: Partial<Record<TaskId, TaskCapture>>,
@@ -141,7 +439,7 @@ export function buildPrompt(
   captures: Partial<Record<TaskId, TaskCapture>>,
   settings: AppSettings,
 ) {
-  const log = buildMarkdown(analysis, captures, settings);
+  const log = buildDetailedMarkdown(analysis, captures, settings);
   return [
     '# 姿勢動作測定ログ 解析プロンプト',
     '',
