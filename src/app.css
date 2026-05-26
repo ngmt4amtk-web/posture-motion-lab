@@ -123,6 +123,49 @@ h2 {
   white-space: nowrap;
 }
 
+.guide {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.guideCard {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--panel);
+  box-shadow: 0 10px 28px rgba(30, 35, 36, 0.08);
+}
+
+.guideCard.primaryGuide {
+  background: #fffdf9;
+}
+
+.guideCard h2 {
+  margin-bottom: 9px;
+}
+
+.guideCard p,
+.guideCard li,
+.guideLead,
+.guideNote {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.guideCard ul,
+.taskGuide ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.guideCard li + li,
+.taskGuide li + li {
+  margin-top: 4px;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
@@ -299,6 +342,23 @@ h2 {
   background: #dff3ec;
 }
 
+.taskButton.selected {
+  border-color: var(--accent);
+}
+
+.taskGuide ol {
+  margin-top: 10px;
+}
+
+.guideNote {
+  margin-top: 10px;
+}
+
+.startSelected {
+  width: 100%;
+  margin-top: 12px;
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -470,13 +530,17 @@ dd small {
 }
 
 @media (max-width: 1080px) {
+  .guide {
+    grid-template-columns: 1fr;
+  }
+
   .workspace {
     grid-template-columns: 1fr;
   }
 
   .sidePanel {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
   }
 
@@ -515,6 +579,7 @@ dd small {
   }
 
   .controlRow,
+  .guide,
   .sidePanel,
   .resultGrid {
     grid-template-columns: 1fr;

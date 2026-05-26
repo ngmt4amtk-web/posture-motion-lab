@@ -20,6 +20,8 @@ export interface TaskDefinition {
   shortLabel: string;
   durationSec: number;
   instruction: string;
+  setup: string;
+  steps: string[];
   view: 'front' | 'side' | 'back' | 'dynamic';
 }
 

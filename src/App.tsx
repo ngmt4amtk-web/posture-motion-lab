@@ -52,6 +52,7 @@ export default function App() {
   const [previewQuality, setPreviewQuality] = useState(0);
   const [captures, setCaptures] = useState<Partial<Record<TaskId, TaskCapture>>>({});
   const [message, setMessage] = useState('カメラを開始してください');
+  const [selectedTaskId, setSelectedTaskId] = useState<TaskId>('front_static');
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -173,6 +174,7 @@ export default function App() {
   const analysis = useMemo(() => analyzeSession(captures), [captures]);
   const hasCaptures = analysis.analyses.length > 0;
   const activeProgress = activeTask ? Math.min(100, (elapsed / activeTask.durationSec) * 100) : 0;
+  const selectedTask = TASKS.find((task) => task.id === selectedTaskId) ?? TASKS[0];
 
   const switchCamera = async () => {
     const next = settings.facingMode === 'environment' ? 'user' : 'environment';
@@ -197,6 +199,22 @@ export default function App() {
           <span>姿勢検出: {poseStatus}</span>
           <span>FPS: {fps}</span>
         </div>
+      </section>
+
+      <section className="guide">
+        <article className="guideCard primaryGuide">
+          <h2>撮影条件</h2>
+          <ul>
+            <li>スマホやPCは固定する。手持ちは比較用データとして使わない。</li>
+            <li>頭から足先まで全身を入れる。足元が切れると膝や足部の値が弱くなる。</li>
+            <li>明るい場所で、体の輪郭が見える服にする。裸足か同じ靴下で揃える。</li>
+            <li>毎回、距離、向き、足幅、椅子の高さを同じにする。</li>
+          </ul>
+        </article>
+        <article className="guideCard">
+          <h2>手持ち撮影</h2>
+          <p>試し撮りとしては可能。ただし測定値はカメラの揺れが混ざるので、品質Cまたは参考値扱いにする。AI解析に渡す本番ログは固定撮影で取る。</p>
+        </article>
       </section>
 
       <section className="workspace">
@@ -238,21 +256,35 @@ export default function App() {
                 const running = activeTask?.id === task.id;
                 return (
                   <button
-                    className={`taskButton ${done ? 'done' : ''} ${running ? 'running' : ''}`}
+                    className={`taskButton ${done ? 'done' : ''} ${running ? 'running' : ''} ${selectedTaskId === task.id ? 'selected' : ''}`}
                     key={task.id}
                     type="button"
                     disabled={Boolean(activeTask)}
-                    onClick={() => startTask(task)}
+                    onClick={() => {
+                      setSelectedTaskId(task.id);
+                    }}
                   >
                     <span>
                       <strong>{task.shortLabel}</strong>
                       <small>{task.durationSec}s</small>
                     </span>
-                    <em>{running ? '測定中' : done ? '保存済' : '開始'}</em>
+                    <em>{running ? '測定中' : done ? '保存済' : selectedTaskId === task.id ? '選択中' : '選択'}</em>
                   </button>
                 );
               })}
             </div>
+          </section>
+
+          <section className="panelBlock taskGuide">
+            <h2>やること</h2>
+            <p className="guideLead">{selectedTask.setup}</p>
+            <ol>
+              {selectedTask.steps.map((step) => <li key={step}>{step}</li>)}
+            </ol>
+            <p className="guideNote">迷ったら、まずカメラ開始で骨格線が全身に出るか確認してから開始。</p>
+            <button className="primary startSelected" type="button" disabled={Boolean(activeTask)} onClick={() => startTask(selectedTask)}>
+              {selectedTask.shortLabel}を開始
+            </button>
           </section>
 
           <section className="panelBlock">
