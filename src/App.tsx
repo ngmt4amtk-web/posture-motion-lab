@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { buildJson, buildMarkdown, buildText, download } from './exporters';
+import { buildJson, buildMarkdown, buildPrompt, buildText, download } from './exporters';
 import { analyzeSession } from './metrics';
 import { detectPose, drawPose, initPoseLandmarker } from './pose';
 import { TASKS } from './protocol';
@@ -253,6 +253,7 @@ export default function App() {
   const exportMd = () => download(buildMarkdown(analysis, captures, settings), 'md');
   const exportTxt = () => download(buildText(analysis, captures, settings), 'txt');
   const exportJson = () => download(buildJson(analysis, captures, settings), 'json');
+  const exportPrompt = () => download(buildPrompt(analysis, captures, settings), 'md', 'posture_motion_lab_prompt');
 
   return (
     <main className="app">
@@ -395,7 +396,9 @@ export default function App() {
               <button type="button" disabled={!hasCaptures} onClick={exportMd}>md</button>
               <button type="button" disabled={!hasCaptures} onClick={exportTxt}>txt</button>
               <button type="button" disabled={!hasCaptures} onClick={exportJson}>json</button>
+              <button type="button" disabled={!hasCaptures} onClick={exportPrompt}>prompt</button>
             </div>
+            <p className="exportHint">AIへ送るなら、まずpromptを使う。詳細検証にはjsonも添える。</p>
             <button className="subtle" type="button" disabled={!hasCaptures} onClick={clearSession}>
               セッションリセット
             </button>
