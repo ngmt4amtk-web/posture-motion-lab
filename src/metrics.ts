@@ -52,6 +52,13 @@ function round(value: number, digits = 3) {
   return Math.round(value * unit) / unit;
 }
 
+function normalizeAxisAngle(angle: number) {
+  let normalized = angle;
+  while (normalized > 90) normalized -= 180;
+  while (normalized < -90) normalized += 180;
+  return normalized;
+}
+
 function point(frame: PoseFrame, index: number) {
   return frame.landmarks[index];
 }
@@ -167,7 +174,7 @@ function staticFrontMetrics(frame: PoseFrame) {
   if (!width || width === 0) return null;
 
   return {
-    head_tilt_deg: deg(Math.atan2(lEar.y - rEar.y, rEar.x - lEar.x)),
+    head_tilt_deg: normalizeAxisAngle(deg(Math.atan2(lEar.y - rEar.y, rEar.x - lEar.x))),
     shoulder_height_diff_ratio: (lShoulder.y - rShoulder.y) / width,
     pelvis_height_diff_ratio: (lHip.y - rHip.y) / width,
     trunk_lean_deg: trunkLean(frame),

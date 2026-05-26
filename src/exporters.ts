@@ -101,6 +101,13 @@ function deg(rad: number) {
   return (rad * 180) / Math.PI;
 }
 
+function normalizeAxisAngle(angle: number) {
+  let normalized = angle;
+  while (normalized > 90) normalized -= 180;
+  while (normalized < -90) normalized += 180;
+  return normalized;
+}
+
 function fmt(value: number | string | null | undefined, digits = 5) {
   if (value == null) return '';
   if (typeof value === 'string') return value;
@@ -217,7 +224,7 @@ function frameDetailRow(taskId: TaskId, frame: PoseFrame, index: number) {
   const lAnkle = point(frame, IDX.leftAnkle);
   const rAnkle = point(frame, IDX.rightAnkle);
 
-  const headTilt = lEar && rEar ? deg(Math.atan2(lEar.y - rEar.y, rEar.x - lEar.x)) : null;
+  const headTilt = lEar && rEar ? normalizeAxisAngle(deg(Math.atan2(lEar.y - rEar.y, rEar.x - lEar.x))) : null;
   const shoulderDiff = lShoulder && rShoulder && width ? (lShoulder.y - rShoulder.y) / width : null;
   const pelvisDiff = lHip && rHip && width ? (lHip.y - rHip.y) / width : null;
   const cva = ear && shoulder ? deg(Math.atan2(shoulder.y - ear.y, Math.abs(ear.x - shoulder.x))) : null;
