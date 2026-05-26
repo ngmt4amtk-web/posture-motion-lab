@@ -261,6 +261,32 @@ h2 {
   background: var(--accent);
 }
 
+.countdownOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  background: rgba(16, 20, 24, 0.34);
+  color: white;
+  text-align: center;
+  backdrop-filter: blur(2px);
+}
+
+.countdownOverlay strong {
+  display: block;
+  font-size: clamp(64px, 14vw, 160px);
+  line-height: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+
+.countdownOverlay span {
+  display: block;
+  margin-top: 12px;
+  font-size: 16px;
+  font-weight: 750;
+}
+
 .controlRow {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -35,10 +35,12 @@ export default function App() {
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const activeTaskRef = useRef<TaskDefinition | null>(null);
+  const pendingTaskRef = useRef<TaskDefinition | null>(null);
   const framesRef = useRef<PoseFrame[]>([]);
   const startTimeRef = useRef<number>(0);
   const startedAtRef = useRef<string>('');
   const finishRef = useRef<() => void>(() => {});
+  const countdownTimerRef = useRef<number | null>(null);
   const lastUiUpdateRef = useRef<number>(0);
   const lastFrameTimeRef = useRef<number>(0);
 
@@ -53,6 +55,9 @@ export default function App() {
   const [captures, setCaptures] = useState<Partial<Record<TaskId, TaskCapture>>>({});
   const [message, setMessage] = useState('カメラを開始してください');
   const [selectedTaskId, setSelectedTaskId] = useState<TaskId>('front_static');
+  const [pendingTaskId, setPendingTaskId] = useState<TaskId | null>(null);
+  const [countdownTask, setCountdownTask] = useState<TaskDefinition | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -86,6 +91,8 @@ export default function App() {
       setMessage('測定できます');
     } catch (error) {
       setCameraStatus('error');
+      pendingTaskRef.current = null;
+      setPendingTaskId(null);
       const text = error instanceof Error ? error.message : '';
       const blocked = /permission|denied|dismissed|notallowed/i.test(text);
       setMessage(blocked ? 'ブラウザのカメラ許可が必要です' : 'カメラを開始できません');
@@ -118,6 +125,49 @@ export default function App() {
     finishRef.current = finishTask;
   }, [finishTask]);
 
+  const recordTask = useCallback((task: TaskDefinition) => {
+    framesRef.current = [];
+    startTimeRef.current = performance.now();
+    startedAtRef.current = new Date().toISOString();
+    activeTaskRef.current = task;
+    setActiveTask(task);
+    setElapsed(0);
+    setMessage(task.instruction);
+  }, []);
+
+  const cancelCountdown = useCallback(() => {
+    if (countdownTimerRef.current != null) {
+      window.clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    pendingTaskRef.current = null;
+    setPendingTaskId(null);
+    setCountdownTask(null);
+    setCountdown(null);
+    setMessage('測定開始をキャンセルしました');
+  }, []);
+
+  const startCountdown = useCallback((task: TaskDefinition) => {
+    if (countdownTimerRef.current != null) window.clearInterval(countdownTimerRef.current);
+    let remaining = 5;
+    setCountdownTask(task);
+    setCountdown(remaining);
+    setMessage(`${task.label}: ${remaining}秒後に測定開始`);
+    countdownTimerRef.current = window.setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        if (countdownTimerRef.current != null) window.clearInterval(countdownTimerRef.current);
+        countdownTimerRef.current = null;
+        setCountdownTask(null);
+        setCountdown(null);
+        recordTask(task);
+        return;
+      }
+      setCountdown(remaining);
+      setMessage(`${task.label}: ${remaining}秒後に測定開始`);
+    }, 1000);
+  }, [recordTask]);
+
   useEffect(() => {
     const loop = () => {
       const video = videoRef.current;
@@ -148,22 +198,38 @@ export default function App() {
     rafRef.current = requestAnimationFrame(loop);
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (countdownTimerRef.current != null) window.clearInterval(countdownTimerRef.current);
       stopStream();
     };
   }, [stopStream]);
 
-  const startTask = (task: TaskDefinition) => {
+  useEffect(() => {
+    if (cameraStatus !== 'ready' || !pendingTaskRef.current || activeTaskRef.current || countdownTask) return;
+    const task = pendingTaskRef.current;
+    pendingTaskRef.current = null;
+    setPendingTaskId(null);
+    startCountdown(task);
+  }, [cameraStatus, countdownTask, startCountdown]);
+
+  const startTask = async (task: TaskDefinition) => {
+    setSelectedTaskId(task.id);
+    if (activeTaskRef.current || countdownTask) return;
     if (cameraStatus !== 'ready') {
-      setMessage('先にカメラを開始してください');
+      pendingTaskRef.current = task;
+      setPendingTaskId(task.id);
+      setMessage('カメラ許可後、5秒カウントダウンして開始します');
+      await startCamera();
       return;
     }
-    framesRef.current = [];
-    startTimeRef.current = performance.now();
-    startedAtRef.current = new Date().toISOString();
-    activeTaskRef.current = task;
-    setActiveTask(task);
-    setElapsed(0);
-    setMessage(task.instruction);
+    startCountdown(task);
+  };
+
+  const stopCurrent = () => {
+    if (countdownTask) {
+      cancelCountdown();
+      return;
+    }
+    finishTask();
   };
 
   const clearSession = () => {
@@ -175,6 +241,7 @@ export default function App() {
   const hasCaptures = analysis.analyses.length > 0;
   const activeProgress = activeTask ? Math.min(100, (elapsed / activeTask.durationSec) * 100) : 0;
   const selectedTask = TASKS.find((task) => task.id === selectedTaskId) ?? TASKS[0];
+  const busy = Boolean(activeTask || countdownTask || pendingTaskId);
 
   const switchCamera = async () => {
     const next = settings.facingMode === 'environment' ? 'user' : 'environment';
@@ -209,6 +276,7 @@ export default function App() {
             <li>頭から足先まで全身を入れる。足元が切れると膝や足部の値が弱くなる。</li>
             <li>明るい場所で、体の輪郭が見える服にする。裸足か同じ靴下で揃える。</li>
             <li>毎回、距離、向き、足幅、椅子の高さを同じにする。</li>
+            <li>1人で測る時は、開始後の5秒カウントダウン中に位置へ戻る。</li>
           </ul>
         </article>
         <article className="guideCard">
@@ -231,6 +299,12 @@ export default function App() {
                 <div className="progressBar" style={{ width: `${activeProgress}%` }} />
               </div>
             )}
+            {countdownTask && countdown != null && (
+              <div className="countdownOverlay">
+                <strong>{countdown}</strong>
+                <span>{countdownTask.shortLabel}を開始します</span>
+              </div>
+            )}
             <div className="cameraHud bottom">{message}</div>
           </div>
 
@@ -241,8 +315,8 @@ export default function App() {
             <button type="button" onClick={switchCamera}>
               カメラ切替
             </button>
-            <button type="button" disabled={!activeTask} onClick={finishTask}>
-              測定停止
+            <button type="button" disabled={!activeTask && !countdownTask} onClick={stopCurrent}>
+              {countdownTask ? '開始取消' : '測定停止'}
             </button>
           </div>
         </div>
@@ -259,7 +333,7 @@ export default function App() {
                     className={`taskButton ${done ? 'done' : ''} ${running ? 'running' : ''} ${selectedTaskId === task.id ? 'selected' : ''}`}
                     key={task.id}
                     type="button"
-                    disabled={Boolean(activeTask)}
+                    disabled={busy}
                     onClick={() => {
                       setSelectedTaskId(task.id);
                     }}
@@ -268,7 +342,7 @@ export default function App() {
                       <strong>{task.shortLabel}</strong>
                       <small>{task.durationSec}s</small>
                     </span>
-                    <em>{running ? '測定中' : done ? '保存済' : selectedTaskId === task.id ? '選択中' : '選択'}</em>
+                    <em>{running ? '測定中' : pendingTaskId === task.id ? '準備中' : done ? '保存済' : selectedTaskId === task.id ? '選択中' : '選択'}</em>
                   </button>
                 );
               })}
@@ -282,8 +356,8 @@ export default function App() {
               {selectedTask.steps.map((step) => <li key={step}>{step}</li>)}
             </ol>
             <p className="guideNote">迷ったら、まずカメラ開始で骨格線が全身に出るか確認してから開始。</p>
-            <button className="primary startSelected" type="button" disabled={Boolean(activeTask)} onClick={() => startTask(selectedTask)}>
-              {selectedTask.shortLabel}を開始
+            <button className="primary startSelected" type="button" disabled={busy} onClick={() => startTask(selectedTask)}>
+              {cameraStatus === 'ready' ? `${selectedTask.shortLabel}を開始` : `カメラ起動して${selectedTask.shortLabel}を開始`}
             </button>
           </section>
 
