@@ -43,6 +43,9 @@ const REQUIRED_DYNAMIC = [
   IDX.rightAnkle,
 ];
 
+const REQUIRED_SIDE_LEFT = [IDX.leftEar, IDX.leftShoulder, IDX.leftHip, IDX.leftKnee, IDX.leftAnkle];
+const REQUIRED_SIDE_RIGHT = [IDX.rightEar, IDX.rightShoulder, IDX.rightHip, IDX.rightKnee, IDX.rightAnkle];
+
 function deg(rad: number) {
   return (rad * 180) / Math.PI;
 }
@@ -75,6 +78,19 @@ function frameConfidence(frame: PoseFrame, required: number[], threshold = 0.5) 
 function highConfidenceRatio(frames: PoseFrame[], required: number[], threshold = 0.5) {
   if (frames.length === 0) return 0;
   const high = frames.filter((frame) => frameConfidence(frame, required, threshold) >= 0.92).length;
+  return high / frames.length;
+}
+
+function sideFrameConfidence(frame: PoseFrame, threshold = 0.5) {
+  return Math.max(
+    frameConfidence(frame, REQUIRED_SIDE_LEFT, threshold),
+    frameConfidence(frame, REQUIRED_SIDE_RIGHT, threshold),
+  );
+}
+
+function highSideConfidenceRatio(frames: PoseFrame[], threshold = 0.5) {
+  if (frames.length === 0) return 0;
+  const high = frames.filter((frame) => sideFrameConfidence(frame, threshold) >= 0.92).length;
   return high / frames.length;
 }
 
@@ -231,15 +247,14 @@ function buildMetric(key: string, label: string, value: number | string | null, 
 }
 
 function analyzeStatic(capture: TaskCapture): TaskAnalysis {
-  const required = REQUIRED_STATIC;
-  const ratio = highConfidenceRatio(capture.frames, required);
+  const isSide = capture.taskId === 'side_static';
+  const ratio = isSide ? highSideConfidenceRatio(capture.frames) : highConfidenceRatio(capture.frames, REQUIRED_STATIC);
   const baseQuality = gradeFromRatio(ratio, capture.frames.length);
   const durationSec = capture.frames.at(-1)?.t ?? 0;
   const warnings: string[] = [];
   if (baseQuality === '測定不能') warnings.push('必要ランドマークが不足しています');
   if (durationSec < 7) warnings.push('静止測定は10秒に満たないため参考値です');
 
-  const isSide = capture.taskId === 'side_static';
   const metrics = isSide ? analyzeStaticSideMetrics(capture.frames) : analyzeStaticFrontBackMetrics(capture.frames);
 
   return {

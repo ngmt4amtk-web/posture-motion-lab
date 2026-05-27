@@ -83,6 +83,9 @@ const REQUIRED_DYNAMIC = [
   IDX.rightAnkle,
 ];
 
+const REQUIRED_SIDE_LEFT = [IDX.leftEar, IDX.leftShoulder, IDX.leftHip, IDX.leftKnee, IDX.leftAnkle];
+const REQUIRED_SIDE_RIGHT = [IDX.rightEar, IDX.rightShoulder, IDX.rightHip, IDX.rightKnee, IDX.rightAnkle];
+
 function dateStamp() {
   const now = new Date();
   const yyyy = now.getFullYear();
@@ -200,9 +203,13 @@ function fppa(frame: PoseFrame, side: 'left' | 'right') {
 }
 
 function sideChoice(frame: PoseFrame) {
-  const leftScore = frameConfidence(frame, [IDX.leftEar, IDX.leftShoulder, IDX.leftHip, IDX.leftKnee, IDX.leftAnkle]);
-  const rightScore = frameConfidence(frame, [IDX.rightEar, IDX.rightShoulder, IDX.rightHip, IDX.rightKnee, IDX.rightAnkle]);
+  const leftScore = frameConfidence(frame, REQUIRED_SIDE_LEFT);
+  const rightScore = frameConfidence(frame, REQUIRED_SIDE_RIGHT);
   return leftScore >= rightScore ? 'left' : 'right';
+}
+
+function sideRequiredConfidence(frame: PoseFrame) {
+  return Math.max(frameConfidence(frame, REQUIRED_SIDE_LEFT), frameConfidence(frame, REQUIRED_SIDE_RIGHT));
 }
 
 function frameDetailRow(taskId: TaskId, frame: PoseFrame, index: number) {
@@ -230,12 +237,13 @@ function frameDetailRow(taskId: TaskId, frame: PoseFrame, index: number) {
   const cva = ear && shoulder ? deg(Math.atan2(shoulder.y - ear.y, Math.abs(ear.x - shoulder.x))) : null;
   const headForward = ear && shoulder && hip && torso ? Math.abs(ear.x - shoulder.x) / torso : null;
   const required = taskId === 'sit_to_stand' || taskId === 'squat' ? REQUIRED_DYNAMIC : REQUIRED_STATIC;
+  const requiredConfidence = taskId === 'side_static' ? sideRequiredConfidence(frame) : frameConfidence(frame, required);
   const footWidth = lAnkle && rAnkle && width ? distance(lAnkle, rAnkle) / width : null;
 
   const row: Record<string, string> = {
     frame: String(index),
     t_sec: fmt(frame.t, 4),
-    required_confidence: fmt(frameConfidence(frame, required), 3),
+    required_confidence: fmt(requiredConfidence, 3),
     nose_v: fmt(visibility(frame, IDX.nose), 3),
     left_ear_v: fmt(visibility(frame, IDX.leftEar), 3),
     right_ear_v: fmt(visibility(frame, IDX.rightEar), 3),
