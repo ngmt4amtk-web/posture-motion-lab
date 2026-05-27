@@ -31,6 +31,16 @@ export interface TaskCapture {
   startedAt: string;
   endedAt: string;
   frames: PoseFrame[];
+  snapshot?: TaskSnapshot;
+}
+
+export interface TaskSnapshot {
+  atSec: number;
+  capturedAt: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+  label: string;
 }
 
 export interface MetricValue {

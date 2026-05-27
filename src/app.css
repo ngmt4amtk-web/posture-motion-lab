@@ -593,6 +593,29 @@ textarea {
   line-height: 1.4;
 }
 
+.snapshotBox {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 82px;
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 10px;
+}
+
+.snapshotBox img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  object-fit: cover;
+  background: #101418;
+}
+
+.snapshotBox button {
+  min-height: 100%;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 dl {
   display: grid;
   gap: 8px;

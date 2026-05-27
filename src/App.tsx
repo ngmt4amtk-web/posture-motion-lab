@@ -4,7 +4,7 @@ import { analyzeSession } from './metrics';
 import { detectPose, drawPose, initPoseLandmarker } from './pose';
 import { TASKS } from './protocol';
 import { loadStoredSession, saveStoredSession } from './storage';
-import type { AppSettings, PoseFrame, PosePoint, TaskCapture, TaskDefinition, TaskId } from './types';
+import type { AppSettings, PoseFrame, PosePoint, TaskCapture, TaskDefinition, TaskId, TaskSnapshot } from './types';
 
 const initialSettings: AppSettings = {
   facingMode: 'environment',
@@ -17,6 +17,8 @@ const initialSettings: AppSettings = {
 
 type ExportKind = 'md' | 'detail' | 'txt' | 'prompt';
 type VoiceCue = { atSec: number; text: string };
+const STATIC_TASK_IDS: TaskId[] = ['front_static', 'side_static', 'back_static'];
+const SNAPSHOT_AT_SEC = 5;
 
 function qualityLabel(value: number) {
   if (value >= 0.85) return 'A';
@@ -95,6 +97,43 @@ function taskVoiceCues(task: TaskDefinition, rhythmGuide: boolean): VoiceCue[] {
   return [{ atSec: Math.max(1, task.durationSec - 5), text: '残り5秒' }];
 }
 
+function isStaticTask(taskId: TaskId) {
+  return STATIC_TASK_IDS.includes(taskId);
+}
+
+function captureVideoSnapshot(video: HTMLVideoElement, label: string, mirror: boolean): TaskSnapshot | null {
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  if (!width || !height) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  if (mirror) {
+    ctx.translate(width, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(video, 0, 0, width, height);
+  return {
+    atSec: SNAPSHOT_AT_SEC,
+    capturedAt: new Date().toISOString(),
+    dataUrl: canvas.toDataURL('image/jpeg', 0.88),
+    width,
+    height,
+    label,
+  };
+}
+
+function downloadDataUrl(dataUrl: string, filename: string) {
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -103,6 +142,7 @@ export default function App() {
   const activeTaskRef = useRef<TaskDefinition | null>(null);
   const pendingTaskRef = useRef<TaskDefinition | null>(null);
   const framesRef = useRef<PoseFrame[]>([]);
+  const snapshotRef = useRef<TaskSnapshot | null>(null);
   const startTimeRef = useRef<number>(0);
   const startedAtRef = useRef<string>('');
   const finishRef = useRef<() => void>(() => {});
@@ -262,6 +302,7 @@ export default function App() {
     const task = activeTaskRef.current;
     if (!task) return;
     const frames = [...framesRef.current];
+    const snapshot = snapshotRef.current ?? undefined;
     clearVoiceTimers();
     setCaptures((current) => ({
       ...current,
@@ -271,15 +312,17 @@ export default function App() {
         startedAt: startedAtRef.current,
         endedAt: new Date().toISOString(),
         frames,
+        snapshot,
       },
     }));
     activeTaskRef.current = null;
     framesRef.current = [];
+    snapshotRef.current = null;
     startTimeRef.current = 0;
     setActiveTask(null);
     setElapsed(0);
-    setMessage(`${task.label}を保存しました`);
-    speak(`${task.shortLabel}、終了。保存しました。`);
+    setMessage(snapshot ? `${task.label}と5秒写真を保存しました` : `${task.label}を保存しました`);
+    speak(snapshot ? `${task.shortLabel}、終了。写真も保存しました。` : `${task.shortLabel}、終了。保存しました。`);
   }, [clearVoiceTimers, speak]);
 
   useEffect(() => {
@@ -288,6 +331,7 @@ export default function App() {
 
   const recordTask = useCallback((task: TaskDefinition) => {
     framesRef.current = [];
+    snapshotRef.current = null;
     startTimeRef.current = performance.now();
     startedAtRef.current = new Date().toISOString();
     activeTaskRef.current = task;
@@ -348,6 +392,13 @@ export default function App() {
         if (task && landmarks) {
           const t = (now - startTimeRef.current) / 1000;
           framesRef.current.push({ t, landmarks });
+          if (isStaticTask(task.id) && !snapshotRef.current && t >= SNAPSHOT_AT_SEC) {
+            const snapshot = captureVideoSnapshot(video, `${task.label} ${SNAPSHOT_AT_SEC}s`, settingsRef.current.facingMode === 'user');
+            if (snapshot) {
+              snapshotRef.current = snapshot;
+              setMessage(`${task.label}: ${SNAPSHOT_AT_SEC}秒写真を保存しました`);
+            }
+          }
           if (t >= task.durationSec) finishRef.current();
         }
         if (now - lastUiUpdateRef.current > 250) {
@@ -425,6 +476,7 @@ export default function App() {
   const exportTxt = () => download(buildText(analysis, captures, settings), 'txt');
   const exportJson = () => download(buildJson(analysis, captures, settings), 'json');
   const exportPrompt = () => download(buildPrompt(analysis, captures, settings), 'md', 'posture_motion_lab_prompt');
+  const snapshotCaptures = Object.values(captures).filter((capture): capture is TaskCapture & { snapshot: TaskSnapshot } => Boolean(capture?.snapshot));
 
   const buildExportContent = (kind: ExportKind) => {
     if (kind === 'detail') return buildDetailedMarkdown(analysis, captures, settings);
@@ -461,6 +513,16 @@ export default function App() {
       textarea.remove();
       setCopyStatus('コピーしました');
     }
+  };
+
+  const downloadSnapshot = (capture: TaskCapture & { snapshot: TaskSnapshot }) => {
+    downloadDataUrl(capture.snapshot.dataUrl, `posture_motion_lab_${capture.taskId}_${capture.snapshot.atSec}s.jpg`);
+  };
+
+  const downloadAllSnapshots = () => {
+    snapshotCaptures.forEach((capture, index) => {
+      window.setTimeout(() => downloadSnapshot(capture), index * 180);
+    });
   };
 
   return (
@@ -641,12 +703,15 @@ export default function App() {
               <button type="button" disabled={!hasCaptures} onClick={exportJson}>json</button>
               <button type="button" disabled={!hasCaptures} onClick={exportPrompt}>prompt</button>
             </div>
-            <p className="exportHint">AIへ送るならprompt。フレーム別数値だけ見たい時はdetail。raw landmark検証はjson。</p>
+            <p className="exportHint">AIへ送るならprompt。フレーム別数値だけ見たい時はdetail。静止5秒写真は結果カードか下のボタンから保存。</p>
             <div className="exportGrid viewGrid">
               <button type="button" disabled={!hasCaptures} onClick={() => showExport('md')}>表示md</button>
               <button type="button" disabled={!hasCaptures} onClick={() => showExport('detail')}>表示detail</button>
               <button type="button" disabled={!hasCaptures} onClick={() => showExport('prompt')}>表示prompt</button>
             </div>
+            <button className="subtle" type="button" disabled={snapshotCaptures.length === 0} onClick={downloadAllSnapshots}>
+              静止写真を保存
+            </button>
             <button className="subtle" type="button" disabled={!hasCaptures} onClick={clearSession}>
               セッションリセット
             </button>
@@ -688,6 +753,20 @@ export default function App() {
                 <p className="meta">
                   {task.durationSec.toFixed(1)}s / {task.frameCount} frames / confidence {(task.highConfidenceRatio * 100).toFixed(0)}%
                 </p>
+                {captures[task.taskId]?.snapshot && (
+                  <div className="snapshotBox">
+                    <img src={captures[task.taskId]?.snapshot?.dataUrl} alt={`${task.label} 5秒写真`} />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const capture = captures[task.taskId];
+                        if (capture?.snapshot) downloadSnapshot(capture as TaskCapture & { snapshot: TaskSnapshot });
+                      }}
+                    >
+                      写真DL
+                    </button>
+                  </div>
+                )}
                 <dl>
                   {task.metrics.map((metric) => (
                     <div key={metric.key}>

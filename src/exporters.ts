@@ -377,6 +377,13 @@ export function buildMarkdown(
     lines.push(`- duration_sec: ${task.durationSec.toFixed(2)}`);
     lines.push(`- frames: ${task.frameCount}`);
     lines.push(`- high_confidence_ratio: ${task.highConfidenceRatio.toFixed(3)}`);
+    const capture = captures[task.taskId];
+    if (capture?.snapshot) {
+      lines.push(`- snapshot: captured`);
+      lines.push(`  - at_sec: ${capture.snapshot.atSec}`);
+      lines.push(`  - image_size: ${capture.snapshot.width}x${capture.snapshot.height}`);
+      lines.push(`  - note: 静止タスク5秒地点のカメラ元画像。AI解析には写真ファイルとして別添えする`);
+    }
     task.metrics.forEach((metric) => {
       lines.push(valueLine(metric.key, metric.value, metric.unit));
       if (metric.note) lines.push(`  - note: ${metric.note}`);
@@ -425,6 +432,10 @@ export function buildText(
     lines.push(`duration_sec=${task.durationSec.toFixed(2)}`);
     lines.push(`frames=${task.frameCount}`);
     lines.push(`high_confidence_ratio=${task.highConfidenceRatio.toFixed(3)}`);
+    const capture = captures[task.taskId];
+    if (capture?.snapshot) {
+      lines.push(`snapshot=captured at ${capture.snapshot.atSec}s ${capture.snapshot.width}x${capture.snapshot.height}`);
+    }
     task.metrics.forEach((metric) => lines.push(`${metric.key}=${metric.value}${metric.unit ? ` ${metric.unit}` : ''}`));
     if (task.warnings.length > 0) lines.push(`warnings=${task.warnings.join(' / ')}`);
     lines.push('');
@@ -516,6 +527,7 @@ export function buildPrompt(
     '- カメラだけで足圧、地面反力、横隔膜機能、骨盤角度絶対値は断定しない',
     '- 猫背、反り腰、肋骨フレア、骨盤前傾は直接診断せず、CVA、頭部前方、矢状面スタック、股関節/膝/足首プロキシに分解して扱う',
     '- アプリや動画の推薦は、このログ単体では確定しない。推薦する場合も候補理由と不足測定を分ける',
+    '- 静止5秒写真が添付されている場合、写真は全体印象の補助、数値ログは比較可能な主情報として扱う',
     '- 1回の測定で正常/異常を決めない',
     '- 不明なものは不明と書く',
     '- 痛み、しびれ、めまい、神経症状がある場合は、セルフ解析の範囲外として扱う',
@@ -525,9 +537,10 @@ export function buildPrompt(
     '2. 品質A/Bの数値だけを中心に、目立つ左右差、前後差、動作中のばらつきを列挙する。',
     '3. 静止姿勢より、立ち座りとスクワットで崩れが増えるかを見る。',
     '4. 猫背系、反り腰系、足部/重心系、股関節/スクワット系、呼吸/肋骨系のどの推薦カテゴリに使える数値が揃っているかを整理する。',
-    '5. アーティストパフォーマンス研究所、Nピラティス、三田院の語彙は、仮説ラベルとしてだけ使う。',
-    '6. 次回、同じ条件で再測定すべき項目を1から3個に絞る。',
-    '7. 必要なら、次回メモに書くべき主観情報を質問として出す。',
+    '5. 静止5秒写真がある場合は、写真で見える体の向き、衣服、撮影ズレ、猫背/反り腰/肋骨/肩甲帯の見た目を補助的に確認する。',
+    '6. アーティストパフォーマンス研究所、Nピラティス、三田院の語彙は、仮説ラベルとしてだけ使う。',
+    '7. 次回、同じ条件で再測定すべき項目を1から3個に絞る。',
+    '8. 必要なら、次回メモに書くべき主観情報を質問として出す。',
     '',
     '## 出力形式',
     '次の見出しだけで返してください。',
