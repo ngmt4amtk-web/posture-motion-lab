@@ -12,6 +12,8 @@ const initialSettings: AppSettings = {
   note: '',
 };
 
+type ExportKind = 'md' | 'detail' | 'txt' | 'prompt';
+
 function qualityLabel(value: number) {
   if (value >= 0.85) return 'A';
   if (value >= 0.65) return 'B';
@@ -58,6 +60,8 @@ export default function App() {
   const [pendingTaskId, setPendingTaskId] = useState<TaskId | null>(null);
   const [countdownTask, setCountdownTask] = useState<TaskDefinition | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [exportPreview, setExportPreview] = useState<{ title: string; content: string } | null>(null);
+  const [copyStatus, setCopyStatus] = useState('');
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -256,6 +260,43 @@ export default function App() {
   const exportJson = () => download(buildJson(analysis, captures, settings), 'json');
   const exportPrompt = () => download(buildPrompt(analysis, captures, settings), 'md', 'posture_motion_lab_prompt');
 
+  const buildExportContent = (kind: ExportKind) => {
+    if (kind === 'detail') return buildDetailedMarkdown(analysis, captures, settings);
+    if (kind === 'txt') return buildText(analysis, captures, settings);
+    if (kind === 'prompt') return buildPrompt(analysis, captures, settings);
+    return buildMarkdown(analysis, captures, settings);
+  };
+
+  const showExport = (kind: ExportKind) => {
+    const labels: Record<ExportKind, string> = {
+      md: 'サマリーmd',
+      detail: '詳細md',
+      txt: 'txtログ',
+      prompt: 'AI解析プロンプト',
+    };
+    setExportPreview({ title: labels[kind], content: buildExportContent(kind) });
+    setCopyStatus('');
+  };
+
+  const copyExport = async () => {
+    if (!exportPreview) return;
+    try {
+      await navigator.clipboard.writeText(exportPreview.content);
+      setCopyStatus('コピーしました');
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = exportPreview.content;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-1000px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+      setCopyStatus('コピーしました');
+    }
+  };
+
   return (
     <main className="app">
       <section className="topbar">
@@ -401,6 +442,11 @@ export default function App() {
               <button type="button" disabled={!hasCaptures} onClick={exportPrompt}>prompt</button>
             </div>
             <p className="exportHint">AIへ送るならprompt。フレーム別数値だけ見たい時はdetail。raw landmark検証はjson。</p>
+            <div className="exportGrid viewGrid">
+              <button type="button" disabled={!hasCaptures} onClick={() => showExport('md')}>表示md</button>
+              <button type="button" disabled={!hasCaptures} onClick={() => showExport('detail')}>表示detail</button>
+              <button type="button" disabled={!hasCaptures} onClick={() => showExport('prompt')}>表示prompt</button>
+            </div>
             <button className="subtle" type="button" disabled={!hasCaptures} onClick={clearSession}>
               セッションリセット
             </button>
@@ -413,6 +459,22 @@ export default function App() {
           <h2>測定値</h2>
           <p>診断、スコア、処方は表示しません。数値と品質だけを残します。</p>
         </div>
+        {exportPreview && (
+          <article className="exportPreview">
+            <header>
+              <div>
+                <h3>{exportPreview.title}</h3>
+                <p>{exportPreview.content.length.toLocaleString('ja-JP')} characters</p>
+              </div>
+              <div className="previewActions">
+                <button type="button" onClick={copyExport}>コピー</button>
+                <button type="button" onClick={() => setExportPreview(null)}>閉じる</button>
+              </div>
+            </header>
+            {copyStatus && <p className="copyStatus">{copyStatus}</p>}
+            <textarea className="previewText" readOnly value={exportPreview.content} />
+          </article>
+        )}
         {analysis.analyses.length === 0 ? (
           <div className="empty">まだ測定ログがありません。</div>
         ) : (

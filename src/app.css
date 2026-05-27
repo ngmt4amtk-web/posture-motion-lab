@@ -415,6 +415,11 @@ textarea {
   gap: 8px;
 }
 
+.viewGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
 .exportHint {
   margin-top: 9px;
   color: var(--muted);
@@ -448,6 +453,54 @@ textarea {
   padding: 32px;
   color: var(--muted);
   text-align: center;
+}
+
+.exportPreview {
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 13px;
+  background: #fffdf9;
+}
+
+.exportPreview header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.exportPreview h3 {
+  font-size: 16px;
+}
+
+.exportPreview p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.previewActions {
+  display: flex;
+  gap: 8px;
+}
+
+.copyStatus {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-weight: 750;
+}
+
+.previewText {
+  width: 100%;
+  min-height: 320px;
+  max-height: 60vh;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+  overflow: auto;
 }
 
 .resultGrid {
@@ -616,5 +669,11 @@ dd small {
   .sidePanel,
   .resultGrid {
     grid-template-columns: 1fr;
+  }
+
+  .exportPreview header,
+  .previewActions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
