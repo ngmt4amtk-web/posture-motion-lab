@@ -3,6 +3,7 @@ import { buildDetailedMarkdown, buildJson, buildMarkdown, buildPrompt, buildText
 import { analyzeSession } from './metrics';
 import { detectPose, drawPose, initPoseLandmarker } from './pose';
 import { TASKS } from './protocol';
+import { loadStoredSession, saveStoredSession } from './storage';
 import type { AppSettings, PoseFrame, PosePoint, TaskCapture, TaskDefinition, TaskId } from './types';
 
 const initialSettings: AppSettings = {
@@ -10,9 +11,12 @@ const initialSettings: AppSettings = {
   heightCm: '',
   chairHeightCm: '',
   note: '',
+  voiceGuide: true,
+  rhythmGuide: false,
 };
 
 type ExportKind = 'md' | 'detail' | 'txt' | 'prompt';
+type VoiceCue = { atSec: number; text: string };
 
 function qualityLabel(value: number) {
   if (value >= 0.85) return 'A';
@@ -31,6 +35,60 @@ function liveVisibility(landmarks: PosePoint[] | null) {
   return visibleCount / required.length;
 }
 
+function speechSupported() {
+  return 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+}
+
+function taskStartSpeech(task: TaskDefinition) {
+  if (task.id === 'front_static') return '正面静止、開始。10秒間、普段通り立ってください。';
+  if (task.id === 'side_static') return '側面静止、開始。横向きのまま、10秒間止まってください。';
+  if (task.id === 'back_static') return '背面静止、開始。10秒間、足幅を変えずに立ってください。';
+  if (task.id === 'sit_to_stand') return '立ち座り、開始。5回行い、終わったら立ったまま止まってください。';
+  return 'スクワット、開始。3回、同じ深さで行ってください。';
+}
+
+function taskVoiceCues(task: TaskDefinition, rhythmGuide: boolean): VoiceCue[] {
+  if (rhythmGuide && task.id === 'squat') {
+    return [
+      { atSec: 3, text: '上がる' },
+      { atSec: 6, text: '2回目、下がる' },
+      { atSec: 9, text: '上がる' },
+      { atSec: 12, text: '3回目、下がる' },
+      { atSec: 15, text: '上がる' },
+      { atSec: 18, text: '立って止まる' },
+      { atSec: 20, text: '残り5秒' },
+    ];
+  }
+
+  if (rhythmGuide && task.id === 'sit_to_stand') {
+    return [
+      { atSec: 1, text: '1回目' },
+      { atSec: 4, text: '2回目' },
+      { atSec: 7, text: '3回目' },
+      { atSec: 10, text: '4回目' },
+      { atSec: 13, text: '5回目' },
+      { atSec: 16, text: '立って止まる' },
+      { atSec: 25, text: '残り5秒' },
+    ];
+  }
+
+  if (task.id === 'sit_to_stand') {
+    return [
+      { atSec: 10, text: '5回終わったら、立って止まる' },
+      { atSec: 25, text: '残り5秒' },
+    ];
+  }
+
+  if (task.id === 'squat') {
+    return [
+      { atSec: 10, text: '3回です。回数をそろえてください' },
+      { atSec: 20, text: '残り5秒' },
+    ];
+  }
+
+  return [{ atSec: Math.max(1, task.durationSec - 5), text: '残り5秒' }];
+}
+
 export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -43,6 +101,10 @@ export default function App() {
   const startedAtRef = useRef<string>('');
   const finishRef = useRef<() => void>(() => {});
   const countdownTimerRef = useRef<number | null>(null);
+  const voiceTimersRef = useRef<number[]>([]);
+  const saveTimerRef = useRef<number | null>(null);
+  const storageReadyRef = useRef(false);
+  const saveSequenceRef = useRef(0);
   const lastUiUpdateRef = useRef<number>(0);
   const lastFrameTimeRef = useRef<number>(0);
 
@@ -62,10 +124,97 @@ export default function App() {
   const [countdown, setCountdown] = useState<number | null>(null);
   const [exportPreview, setExportPreview] = useState<{ title: string; content: string } | null>(null);
   const [copyStatus, setCopyStatus] = useState('');
+  const [storageStatus, setStorageStatus] = useState('起動中');
 
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadStoredSession()
+      .then((stored) => {
+        if (cancelled) return;
+        if (stored) {
+          const restoredSettings = { ...initialSettings, ...stored.settings };
+          setSettings(restoredSettings);
+          settingsRef.current = restoredSettings;
+          setCaptures(stored.captures ?? {});
+          setMessage('前回セッションを復元しました');
+          setStorageStatus('復元済');
+        } else {
+          setStorageStatus('待機');
+        }
+        storageReadyRef.current = true;
+      })
+      .catch(() => {
+        if (cancelled) return;
+        storageReadyRef.current = true;
+        setStorageStatus('保存不可');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!storageReadyRef.current) return;
+    if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+    setStorageStatus('保存待ち');
+    saveTimerRef.current = window.setTimeout(() => {
+      const sequence = saveSequenceRef.current + 1;
+      saveSequenceRef.current = sequence;
+      setStorageStatus('保存中');
+      saveStoredSession({ settings, captures, savedAt: new Date().toISOString() })
+        .then(() => {
+          if (saveSequenceRef.current === sequence) setStorageStatus('保存済');
+        })
+        .catch(() => {
+          if (saveSequenceRef.current === sequence) setStorageStatus('保存失敗');
+        });
+    }, 150);
+
+    return () => {
+      if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+    };
+  }, [settings, captures]);
+
+  const clearVoiceTimers = useCallback(() => {
+    voiceTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    voiceTimersRef.current = [];
+  }, []);
+
+  const speak = useCallback((text: string, interrupt = true) => {
+    if (!settingsRef.current.voiceGuide) return false;
+    if (!speechSupported()) {
+      setMessage('このブラウザは音声合成に対応していません');
+      return false;
+    }
+
+    if (interrupt) window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'ja-JP';
+    utterance.rate = 1.02;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+    return true;
+  }, []);
+
+  const scheduleVoiceCues = useCallback((task: TaskDefinition) => {
+    clearVoiceTimers();
+    if (!settingsRef.current.voiceGuide) return;
+    const cues = taskVoiceCues(task, settingsRef.current.rhythmGuide);
+    voiceTimersRef.current = cues.map((cue) => window.setTimeout(() => speak(cue.text), cue.atSec * 1000));
+  }, [clearVoiceTimers, speak]);
+
+  useEffect(() => {
+    return () => {
+      clearVoiceTimers();
+      if (speechSupported()) window.speechSynthesis.cancel();
+      if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+    };
+  }, [clearVoiceTimers]);
 
   const stopStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -107,6 +256,7 @@ export default function App() {
     const task = activeTaskRef.current;
     if (!task) return;
     const frames = [...framesRef.current];
+    clearVoiceTimers();
     setCaptures((current) => ({
       ...current,
       [task.id]: {
@@ -123,7 +273,8 @@ export default function App() {
     setActiveTask(null);
     setElapsed(0);
     setMessage(`${task.label}を保存しました`);
-  }, []);
+    speak(`${task.shortLabel}、終了。保存しました。`);
+  }, [clearVoiceTimers, speak]);
 
   useEffect(() => {
     finishRef.current = finishTask;
@@ -137,19 +288,24 @@ export default function App() {
     setActiveTask(task);
     setElapsed(0);
     setMessage(task.instruction);
-  }, []);
+    speak(taskStartSpeech(task));
+    scheduleVoiceCues(task);
+  }, [scheduleVoiceCues, speak]);
 
   const cancelCountdown = useCallback(() => {
     if (countdownTimerRef.current != null) {
       window.clearInterval(countdownTimerRef.current);
       countdownTimerRef.current = null;
     }
+    clearVoiceTimers();
+    if (speechSupported()) window.speechSynthesis.cancel();
     pendingTaskRef.current = null;
     setPendingTaskId(null);
     setCountdownTask(null);
     setCountdown(null);
     setMessage('測定開始をキャンセルしました');
-  }, []);
+    speak('キャンセルしました');
+  }, [clearVoiceTimers, speak]);
 
   const startCountdown = useCallback((task: TaskDefinition) => {
     if (countdownTimerRef.current != null) window.clearInterval(countdownTimerRef.current);
@@ -157,6 +313,7 @@ export default function App() {
     setCountdownTask(task);
     setCountdown(remaining);
     setMessage(`${task.label}: ${remaining}秒後に測定開始`);
+    speak(`${task.shortLabel}。5秒後に開始します。`);
     countdownTimerRef.current = window.setInterval(() => {
       remaining -= 1;
       if (remaining <= 0) {
@@ -169,8 +326,9 @@ export default function App() {
       }
       setCountdown(remaining);
       setMessage(`${task.label}: ${remaining}秒後に測定開始`);
+      speak(String(remaining));
     }, 1000);
-  }, [recordTask]);
+  }, [recordTask, speak]);
 
   useEffect(() => {
     const loop = () => {
@@ -238,6 +396,8 @@ export default function App() {
 
   const clearSession = () => {
     setCaptures({});
+    setExportPreview(null);
+    setCopyStatus('');
     setMessage('セッションをリセットしました');
   };
 
@@ -307,6 +467,7 @@ export default function App() {
         <div className="statusStrip">
           <span>カメラ: {cameraStatus}</span>
           <span>姿勢検出: {poseStatus}</span>
+          <span>保存: {storageStatus}</span>
           <span>FPS: {fps}</span>
         </div>
       </section>
@@ -401,6 +562,39 @@ export default function App() {
             <p className="guideNote">迷ったら、まずカメラ開始で骨格線が全身に出るか確認してから開始。</p>
             <button className="primary startSelected" type="button" disabled={busy} onClick={() => startTask(selectedTask)}>
               {cameraStatus === 'ready' ? `${selectedTask.shortLabel}を開始` : `カメラ起動して${selectedTask.shortLabel}を開始`}
+            </button>
+          </section>
+
+          <section className="panelBlock voicePanel">
+            <h2>音声</h2>
+            <label className="checkLabel">
+              <input
+                type="checkbox"
+                checked={settings.voiceGuide}
+                onChange={(event) => {
+                  const voiceGuide = event.target.checked;
+                  if (!voiceGuide && speechSupported()) window.speechSynthesis.cancel();
+                  setSettings((current) => ({
+                    ...current,
+                    voiceGuide,
+                    rhythmGuide: voiceGuide ? current.rhythmGuide : false,
+                  }));
+                }}
+              />
+              <span>音声ガイド</span>
+            </label>
+            <label className="checkLabel">
+              <input
+                type="checkbox"
+                checked={settings.rhythmGuide}
+                disabled={!settings.voiceGuide}
+                onChange={(event) => setSettings((current) => ({ ...current, rhythmGuide: event.target.checked }))}
+              />
+              <span>リズムガイド</span>
+            </label>
+            <p className="exportHint">リズムONは回数をそろえる測定用。自然速度を比べる時はOFF。</p>
+            <button className="subtle" type="button" disabled={!settings.voiceGuide} onClick={() => speak('音声ガイド、オンです。')}>
+              音声テスト
             </button>
           </section>
 

@@ -66,4 +66,6 @@ export interface AppSettings {
   heightCm: string;
   chairHeightCm: string;
   note: string;
+  voiceGuide: boolean;
+  rhythmGuide: boolean;
 }

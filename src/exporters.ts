@@ -315,6 +315,8 @@ export function buildMarkdown(
   lines.push(`camera: ${settings.facingMode}`);
   lines.push(`height_cm: ${settings.heightCm || 'unknown'}`);
   lines.push(`chair_height_cm: ${settings.chairHeightCm || 'unknown'}`);
+  lines.push(`voice_guide: ${settings.voiceGuide ? 'on' : 'off'}`);
+  lines.push(`rhythm_guide: ${settings.rhythmGuide ? 'on' : 'off'}`);
   lines.push(`overall_quality: ${analysis.overallQuality}`);
   lines.push(`notes: ${settings.note || ''}`);
   lines.push('');
@@ -368,6 +370,8 @@ export function buildText(
   lines.push(`camera=${settings.facingMode}`);
   lines.push(`height_cm=${settings.heightCm || 'unknown'}`);
   lines.push(`chair_height_cm=${settings.chairHeightCm || 'unknown'}`);
+  lines.push(`voice_guide=${settings.voiceGuide ? 'on' : 'off'}`);
+  lines.push(`rhythm_guide=${settings.rhythmGuide ? 'on' : 'off'}`);
   lines.push(`overall_quality=${analysis.overallQuality}`);
   lines.push(`captured_tasks=${Object.keys(captures).length}`);
   lines.push(`notes=${settings.note || ''}`);
