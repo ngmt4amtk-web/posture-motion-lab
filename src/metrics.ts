@@ -1,4 +1,4 @@
-import { TASKS } from './protocol';
+import { PROTOCOL_VERSION, TASKS } from './protocol';
 import type { MetricValue, PoseFrame, PosePoint, QualityGrade, SessionAnalysis, TaskAnalysis, TaskCapture, TaskId } from './types';
 
 const IDX = {
@@ -115,6 +115,47 @@ function max(values: number[]) {
   return values.reduce((m, value) => Math.max(m, value), Number.NEGATIVE_INFINITY);
 }
 
+function standardDeviation(values: number[]) {
+  if (values.length < 2) return null;
+  const avg = mean(values);
+  if (avg == null) return null;
+  const variance = mean(values.map((value) => (value - avg) ** 2));
+  return variance == null ? null : Math.sqrt(variance);
+}
+
+function coefficientOfVariation(values: number[]) {
+  if (values.length < 2) return null;
+  const avg = mean(values);
+  const sd = standardDeviation(values);
+  if (avg == null || sd == null || Math.abs(avg) < 0.000001) return null;
+  return sd / Math.abs(avg);
+}
+
+function percentile(values: number[], q: number) {
+  const xs = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (xs.length === 0) return null;
+  const index = (xs.length - 1) * q;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return xs[lower];
+  const weight = index - lower;
+  return xs[lower] * (1 - weight) + xs[upper] * weight;
+}
+
+function mode(values: string[]) {
+  const counts = new Map<string, number>();
+  values.forEach((value) => counts.set(value, (counts.get(value) ?? 0) + 1));
+  let best: string | null = null;
+  let bestCount = 0;
+  counts.forEach((count, value) => {
+    if (count > bestCount) {
+      best = value;
+      bestCount = count;
+    }
+  });
+  return best;
+}
+
 function distance(a: PosePoint, b: PosePoint) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -188,19 +229,29 @@ function staticFrontMetrics(frame: PoseFrame) {
 
   const width = shoulderWidth(frame);
   if (!width || width === 0) return null;
+  const shoulderCenter = mid(lShoulder, rShoulder);
+  const hipCenter = mid(lHip, rHip);
+  const kneeCenter = mid(lKnee, rKnee);
+  const ankleCenter = mid(lAnkle, rAnkle);
+  const ankleWidth = distance(lAnkle, rAnkle);
 
   return {
     head_tilt_deg: normalizeAxisAngle(deg(Math.atan2(lEar.y - rEar.y, rEar.x - lEar.x))),
     shoulder_height_diff_ratio: (lShoulder.y - rShoulder.y) / width,
     pelvis_height_diff_ratio: (lHip.y - rHip.y) / width,
     trunk_lean_deg: trunkLean(frame),
+    shoulder_over_feet_offset_ratio: (shoulderCenter.x - ankleCenter.x) / width,
+    pelvis_over_feet_offset_ratio: (hipCenter.x - ankleCenter.x) / width,
+    knee_midline_over_feet_offset_ratio: (kneeCenter.x - ankleCenter.x) / width,
     knee_center_offset_left: (lKnee.x - (lHip.x + lAnkle.x) / 2) / width,
     knee_center_offset_right: (rKnee.x - (rHip.x + rAnkle.x) / 2) / width,
+    knee_width_ratio: distance(lKnee, rKnee) / width,
+    knee_to_foot_width_ratio: ankleWidth > 0 ? distance(lKnee, rKnee) / ankleWidth : null,
     foot_width_ratio: distance(lAnkle, rAnkle) / width,
   };
 }
 
-function staticSideMetrics(frame: PoseFrame) {
+function sidePoints(frame: PoseFrame) {
   const leftScore = frameConfidence(frame, [IDX.leftEar, IDX.leftShoulder, IDX.leftHip, IDX.leftKnee, IDX.leftAnkle], 0.4);
   const rightScore = frameConfidence(frame, [IDX.rightEar, IDX.rightShoulder, IDX.rightHip, IDX.rightKnee, IDX.rightAnkle], 0.4);
   const side = leftScore >= rightScore ? 'left' : 'right';
@@ -209,17 +260,39 @@ function staticSideMetrics(frame: PoseFrame) {
   const hip = point(frame, side === 'left' ? IDX.leftHip : IDX.rightHip);
   const knee = point(frame, side === 'left' ? IDX.leftKnee : IDX.rightKnee);
   const ankle = point(frame, side === 'left' ? IDX.leftAnkle : IDX.rightAnkle);
+  const heel = point(frame, side === 'left' ? IDX.leftHeel : IDX.rightHeel);
+  const foot = point(frame, side === 'left' ? IDX.leftFoot : IDX.rightFoot);
   if (![ear, shoulder, hip, knee, ankle].every(Boolean)) return null;
-
   const torso = distance(shoulder, hip);
-  const kneeAngle = angle3(hip, knee, ankle);
+  if (!torso || torso === 0) return null;
+  return { side, ear, shoulder, hip, knee, ankle, heel, foot, torso };
+}
+
+function staticSideMetrics(frame: PoseFrame) {
+  const p = sidePoints(frame);
+  if (!p) return null;
+
+  const kneeAngle = angle3(p.hip, p.knee, p.ankle);
+  const hipAngle = angle3(p.shoulder, p.hip, p.knee);
+  const ankleAngle = p.foot ? angle3(p.knee, p.ankle, p.foot) : null;
+  const earShoulderOffset = Math.abs(p.ear.x - p.shoulder.x) / p.torso;
+  const shoulderHipOffset = Math.abs(p.shoulder.x - p.hip.x) / p.torso;
+  const hipAnkleOffset = Math.abs(p.hip.x - p.ankle.x) / p.torso;
+  const kneeAnkleOffset = Math.abs(p.knee.x - p.ankle.x) / p.torso;
 
   return {
-    craniovertebral_angle_deg: deg(Math.atan2(shoulder.y - ear.y, Math.abs(ear.x - shoulder.x))),
-    head_forward_ratio: torso > 0 ? Math.abs(ear.x - shoulder.x) / torso : null,
-    trunk_lean_deg: deg(Math.atan2(shoulder.x - hip.x, hip.y - shoulder.y)),
+    side_used: p.side,
+    craniovertebral_angle_deg: deg(Math.atan2(p.shoulder.y - p.ear.y, Math.abs(p.ear.x - p.shoulder.x))),
+    head_forward_ratio: earShoulderOffset,
+    trunk_lean_deg: deg(Math.atan2(p.shoulder.x - p.hip.x, p.hip.y - p.shoulder.y)),
+    shoulder_hip_offset_ratio: shoulderHipOffset,
+    hip_ankle_offset_ratio: hipAnkleOffset,
+    knee_ankle_offset_ratio: kneeAnkleOffset,
+    sagittal_stack_error_ratio: earShoulderOffset + shoulderHipOffset + hipAnkleOffset,
     knee_angle_deg: kneeAngle,
-    ankle_under_hip_ratio: torso > 0 ? (ankle.x - hip.x) / torso : null,
+    hip_angle_deg: hipAngle,
+    ankle_angle_deg: ankleAngle,
+    ankle_under_hip_ratio: (p.ankle.x - p.hip.x) / p.torso,
   };
 }
 
@@ -234,6 +307,14 @@ function fppa(frame: PoseFrame, side: 'left' | 'right') {
 
 function metricAverage(frames: PoseFrame[], getter: (frame: PoseFrame) => number | null | undefined) {
   return mean(frames.map(getter));
+}
+
+function metricAroundTime(frames: PoseFrame[], timeSec: number, windowSec: number, getter: (frame: PoseFrame) => number | null | undefined) {
+  return mean(
+    frames
+      .filter((frame) => Math.abs(frame.t - timeSec) <= windowSec)
+      .map(getter),
+  );
 }
 
 function buildMetric(key: string, label: string, value: number | string | null, unit?: string, note?: string): MetricValue {
@@ -276,8 +357,13 @@ function analyzeStaticFrontBackMetrics(frames: PoseFrame[]): MetricValue[] {
     buildMetric('shoulder_height_diff_ratio', '肩高差', mean(parsed.map((m) => m.shoulder_height_diff_ratio)), 'ratio', '正値は左側ランドマークが下'),
     buildMetric('pelvis_height_diff_ratio', '骨盤高差', mean(parsed.map((m) => m.pelvis_height_diff_ratio)), 'ratio', '正値は左側ランドマークが下'),
     buildMetric('trunk_lean_deg', '体幹側方傾斜', mean(parsed.map((m) => m.trunk_lean_deg)), 'deg'),
+    buildMetric('shoulder_over_feet_offset_ratio', '肩中心-足中心ずれ', mean(parsed.map((m) => m.shoulder_over_feet_offset_ratio)), 'ratio'),
+    buildMetric('pelvis_over_feet_offset_ratio', '骨盤中心-足中心ずれ', mean(parsed.map((m) => m.pelvis_over_feet_offset_ratio)), 'ratio'),
+    buildMetric('knee_midline_over_feet_offset_ratio', '膝中心-足中心ずれ', mean(parsed.map((m) => m.knee_midline_over_feet_offset_ratio)), 'ratio'),
     buildMetric('knee_center_offset_left', '左膝中心オフセット', mean(parsed.map((m) => m.knee_center_offset_left)), 'ratio'),
     buildMetric('knee_center_offset_right', '右膝中心オフセット', mean(parsed.map((m) => m.knee_center_offset_right)), 'ratio'),
+    buildMetric('knee_width_ratio', '膝幅', mean(parsed.map((m) => m.knee_width_ratio)), 'ratio'),
+    buildMetric('knee_to_foot_width_ratio', '膝幅/足幅', mean(parsed.map((m) => m.knee_to_foot_width_ratio)), 'ratio'),
     buildMetric('foot_width_ratio', '足幅', mean(parsed.map((m) => m.foot_width_ratio)), 'ratio'),
   ];
 }
@@ -285,10 +371,17 @@ function analyzeStaticFrontBackMetrics(frames: PoseFrame[]): MetricValue[] {
 function analyzeStaticSideMetrics(frames: PoseFrame[]): MetricValue[] {
   const parsed = frames.map(staticSideMetrics).filter((item): item is NonNullable<ReturnType<typeof staticSideMetrics>> => Boolean(item));
   return [
+    buildMetric('side_used', '側面採用側', mode(parsed.map((m) => m.side_used)) ?? 'unknown'),
     buildMetric('craniovertebral_angle_deg', 'CVAプロキシ', mean(parsed.map((m) => m.craniovertebral_angle_deg)), 'deg'),
     buildMetric('head_forward_ratio', '頭部前方移動プロキシ', mean(parsed.map((m) => m.head_forward_ratio)), 'ratio'),
     buildMetric('trunk_lean_deg', '体幹前後傾斜', mean(parsed.map((m) => m.trunk_lean_deg)), 'deg'),
+    buildMetric('shoulder_hip_offset_ratio', '肩-股関節前後ずれ', mean(parsed.map((m) => m.shoulder_hip_offset_ratio)), 'ratio', '絶対値。体幹長で正規化'),
+    buildMetric('hip_ankle_offset_ratio', '股関節-足首前後ずれ', mean(parsed.map((m) => m.hip_ankle_offset_ratio)), 'ratio', '絶対値。体幹長で正規化'),
+    buildMetric('knee_ankle_offset_ratio', '膝-足首前後ずれ', mean(parsed.map((m) => m.knee_ankle_offset_ratio)), 'ratio', '絶対値。体幹長で正規化'),
+    buildMetric('sagittal_stack_error_ratio', '矢状面スタック誤差', mean(parsed.map((m) => m.sagittal_stack_error_ratio)), 'ratio', '耳-肩、肩-股関節、股関節-足首の横ずれ合計'),
     buildMetric('knee_angle_deg', '膝角度プロキシ', mean(parsed.map((m) => m.knee_angle_deg)), 'deg'),
+    buildMetric('hip_angle_deg', '股関節角度プロキシ', mean(parsed.map((m) => m.hip_angle_deg)), 'deg'),
+    buildMetric('ankle_angle_deg', '足関節角度プロキシ', mean(parsed.map((m) => m.ankle_angle_deg)), 'deg'),
     buildMetric('ankle_under_hip_ratio', '足関節位置プロキシ', mean(parsed.map((m) => m.ankle_under_hip_ratio)), 'ratio'),
   ];
 }
@@ -350,6 +443,7 @@ function analyzeSitToStand(capture: TaskCapture): TaskAnalysis {
   const trunkPeaks = frames.map((frame) => Math.abs(trunkLean(frame) ?? 0));
   const kneePathLeft = normalizedPath(frames, IDX.leftKnee);
   const kneePathRight = normalizedPath(frames, IDX.rightKnee);
+  const kneePathDiff = kneePathLeft != null && kneePathRight != null ? Math.abs(kneePathLeft - kneePathRight) : null;
   const sway = pelvisSwayAfter(frames, standTransitions.at(-1) ?? durationSec);
 
   let quality = gradeFromRatio(ratio, frames.length);
@@ -368,10 +462,13 @@ function analyzeSitToStand(capture: TaskCapture): TaskAnalysis {
       buildMetric('rep_count_detected', '推定立ち上がり回数', repCount, 'count'),
       buildMetric('total_time_sec', '5回完了時間または記録時間', detectedTotal, 'sec', repCount >= 5 ? undefined : '5回未満のため記録時間'),
       buildMetric('rep_times_sec', 'rep間隔推定', repTimes.join(', '), 'sec'),
+      buildMetric('rep_time_cv', 'rep間隔ばらつきCV', coefficientOfVariation(repTimes), 'ratio'),
       buildMetric('hip_vertical_range_ratio', '骨盤上下移動幅', range, 'ratio'),
       buildMetric('trunk_flexion_peak_deg', '体幹前傾ピーク', max(trunkPeaks), 'deg'),
+      buildMetric('trunk_flexion_p95_deg', '体幹前傾95パーセンタイル', percentile(trunkPeaks, 0.95), 'deg', '一瞬の誤検出を避けるための補助値'),
       buildMetric('knee_lateral_path_left', '左膝横移動幅', kneePathLeft, 'ratio'),
       buildMetric('knee_lateral_path_right', '右膝横移動幅', kneePathRight, 'ratio'),
+      buildMetric('knee_lateral_path_diff', '膝横移動幅左右差', kneePathDiff, 'ratio'),
       buildMetric('post_stand_sway_ratio', '最終立位後の骨盤揺れ', sway, 'ratio'),
     ],
     warnings,
@@ -430,9 +527,25 @@ function analyzeSquat(capture: TaskCapture): TaskAnalysis {
 
   const leftFppa = frames.map((frame) => fppa(frame, 'left')).filter((value): value is number => Number.isFinite(value));
   const rightFppa = frames.map((frame) => fppa(frame, 'right')).filter((value): value is number => Number.isFinite(value));
+  const bottomFppaPairs = bottoms
+    .map((time) => ({
+      left: metricAroundTime(frames, time, 0.35, (frame) => fppa(frame, 'left')),
+      right: metricAroundTime(frames, time, 0.35, (frame) => fppa(frame, 'right')),
+    }))
+    .filter((value): value is { left: number; right: number } => Number.isFinite(value.left) && Number.isFinite(value.right));
+  const bottomFppaLeft = bottomFppaPairs.map((value) => value.left);
+  const bottomFppaRight = bottomFppaPairs.map((value) => value.right);
+  const bottomFppaDiff = bottomFppaPairs.map((value) => Math.abs(value.left - value.right));
+  const bottomKneeLeft = bottoms.map((time) => metricAroundTime(frames, time, 0.35, (frame) => angle3(point(frame, IDX.leftHip), point(frame, IDX.leftKnee), point(frame, IDX.leftAnkle)))).filter((value): value is number => Number.isFinite(value));
+  const bottomKneeRight = bottoms.map((time) => metricAroundTime(frames, time, 0.35, (frame) => angle3(point(frame, IDX.rightHip), point(frame, IDX.rightKnee), point(frame, IDX.rightAnkle)))).filter((value): value is number => Number.isFinite(value));
   const trunkPeaks = frames.map((frame) => Math.abs(trunkLean(frame) ?? 0));
+  const bottomTrunkLean = bottoms.map((time) => metricAroundTime(frames, time, 0.35, (frame) => Math.abs(trunkLean(frame) ?? 0))).filter((value): value is number => Number.isFinite(value));
   const heelLiftLeft = verticalPath(frames, IDX.leftHeel);
   const heelLiftRight = verticalPath(frames, IDX.rightHeel);
+  const kneePathLeft = normalizedPath(frames, IDX.leftKnee);
+  const kneePathRight = normalizedPath(frames, IDX.rightKnee);
+  const meanScale = mean(pelvisSeries.map((item) => item.scale));
+  const normalizedDepth = meanScale && meanScale > 0 ? depthRange / meanScale : null;
 
   let quality = gradeFromRatio(ratio, frames.length);
   if (bottoms.length < 2 || depthRange < 0.025) quality = '測定不能';
@@ -447,12 +560,126 @@ function analyzeSquat(capture: TaskCapture): TaskAnalysis {
     durationSec,
     metrics: [
       buildMetric('bottom_count_detected', '推定ボトム回数', bottoms.length, 'count'),
+      buildMetric('bottom_times_sec', 'ボトム推定時刻', bottoms.map((time) => round(time, 2)).join(', '), 'sec'),
       buildMetric('squat_depth_ratio', 'しゃがみ深さ', depthRange, 'ratio'),
+      buildMetric('squat_depth_torso_ratio', 'しゃがみ深さ/体幹長', normalizedDepth, 'ratio'),
       buildMetric('fppa_left_deg', '左FPPA最大', leftFppa.length ? max(leftFppa) : null, 'deg'),
       buildMetric('fppa_right_deg', '右FPPA最大', rightFppa.length ? max(rightFppa) : null, 'deg'),
+      buildMetric('bottom_fppa_left_deg', 'ボトム左FPPA平均', mean(bottomFppaLeft), 'deg'),
+      buildMetric('bottom_fppa_right_deg', 'ボトム右FPPA平均', mean(bottomFppaRight), 'deg'),
+      buildMetric('bottom_fppa_diff_deg', 'ボトムFPPA左右差', mean(bottomFppaDiff), 'deg'),
+      buildMetric('bottom_knee_angle_left_deg', 'ボトム左膝角度', mean(bottomKneeLeft), 'deg'),
+      buildMetric('bottom_knee_angle_right_deg', 'ボトム右膝角度', mean(bottomKneeRight), 'deg'),
       buildMetric('trunk_lean_peak_deg', '体幹傾斜ピーク', max(trunkPeaks), 'deg'),
+      buildMetric('trunk_lean_p95_deg', '体幹傾斜95パーセンタイル', percentile(trunkPeaks, 0.95), 'deg'),
+      buildMetric('bottom_trunk_lean_deg', 'ボトム体幹傾斜平均', mean(bottomTrunkLean), 'deg'),
+      buildMetric('knee_lateral_path_left', '左膝横移動幅', kneePathLeft, 'ratio'),
+      buildMetric('knee_lateral_path_right', '右膝横移動幅', kneePathRight, 'ratio'),
       buildMetric('heel_lift_proxy_left', '左踵上下移動', heelLiftLeft, 'ratio'),
       buildMetric('heel_lift_proxy_right', '右踵上下移動', heelLiftRight, 'ratio'),
+    ],
+    warnings,
+  };
+}
+
+function sideVerticalPath(frames: PoseFrame[], getter: (points: NonNullable<ReturnType<typeof sidePoints>>) => PosePoint | undefined) {
+  const usable = frames
+    .map((frame) => ({ points: sidePoints(frame) }))
+    .filter((item): item is { points: NonNullable<ReturnType<typeof sidePoints>> } => Boolean(item.points));
+  const ys = usable.map((item) => getter(item.points)?.y).filter((value): value is number => Number.isFinite(value));
+  const scales = usable.map((item) => item.points.torso).filter((value) => Number.isFinite(value) && value > 0);
+  if (ys.length < 2 || scales.length === 0) return null;
+  return (max(ys) - min(ys)) / (mean(scales) ?? 1);
+}
+
+function analyzeSideSquat(capture: TaskCapture): TaskAnalysis {
+  const frames = capture.frames;
+  const ratio = highSideConfidenceRatio(frames);
+  const durationSec = frames.at(-1)?.t ?? 0;
+  const warnings: string[] = [];
+  const usable = frames
+    .map((frame) => ({ frame, points: sidePoints(frame) }))
+    .filter((item): item is { frame: PoseFrame; points: NonNullable<ReturnType<typeof sidePoints>> } => Boolean(item.points));
+
+  if (usable.length < 20) {
+    return {
+      taskId: capture.taskId,
+      label: capture.label,
+      quality: '測定不能',
+      highConfidenceRatio: ratio,
+      frameCount: frames.length,
+      durationSec,
+      metrics: [],
+      warnings: ['側面の耳・肩・股関節・膝・足首を取得できません'],
+    };
+  }
+
+  const ySeries = movingAverage(usable.map((item) => item.points.hip.y), 7);
+  const yMin = min(ySeries);
+  const yMax = max(ySeries);
+  const depthRange = yMax - yMin;
+  const bottoms = findPeaks(ySeries, usable.map((item) => item.frame.t), yMin + depthRange * 0.58);
+  const meanScale = mean(usable.map((item) => item.points.torso));
+  const normalizedDepth = meanScale && meanScale > 0 ? depthRange / meanScale : null;
+
+  if (depthRange < 0.035) warnings.push('股関節上下移動が小さく、側面スクワット検出が不安定です');
+  if (bottoms.length < 3) warnings.push(`ボトム推定が3回未満です: ${bottoms.length}回`);
+
+  const side = mode(usable.map((item) => item.points.side)) ?? 'unknown';
+  const trunkLeanValues = usable.map((item) => Math.abs(deg(Math.atan2(item.points.shoulder.x - item.points.hip.x, item.points.hip.y - item.points.shoulder.y))));
+  const kneeAngles = usable.map((item) => angle3(item.points.hip, item.points.knee, item.points.ankle)).filter((value): value is number => Number.isFinite(value));
+  const hipAngles = usable.map((item) => angle3(item.points.shoulder, item.points.hip, item.points.knee)).filter((value): value is number => Number.isFinite(value));
+  const ankleAngles = usable.map((item) => (item.points.foot ? angle3(item.points.knee, item.points.ankle, item.points.foot) : null)).filter((value): value is number => Number.isFinite(value));
+  const kneeAnkleOffsets = usable.map((item) => Math.abs(item.points.knee.x - item.points.ankle.x) / item.points.torso);
+  const hipAnkleOffsets = usable.map((item) => Math.abs(item.points.hip.x - item.points.ankle.x) / item.points.torso);
+  const stackErrors = usable.map((item) => (
+    Math.abs(item.points.ear.x - item.points.shoulder.x)
+    + Math.abs(item.points.shoulder.x - item.points.hip.x)
+    + Math.abs(item.points.hip.x - item.points.ankle.x)
+  ) / item.points.torso);
+  const bottomKneeAngles = bottoms.map((time) => metricAroundTime(frames, time, 0.35, (frame) => {
+    const p = sidePoints(frame);
+    return p ? angle3(p.hip, p.knee, p.ankle) : null;
+  })).filter((value): value is number => Number.isFinite(value));
+  const bottomHipAngles = bottoms.map((time) => metricAroundTime(frames, time, 0.35, (frame) => {
+    const p = sidePoints(frame);
+    return p ? angle3(p.shoulder, p.hip, p.knee) : null;
+  })).filter((value): value is number => Number.isFinite(value));
+  const bottomKneeAnkleOffsets = bottoms.map((time) => metricAroundTime(frames, time, 0.35, (frame) => {
+    const p = sidePoints(frame);
+    return p ? Math.abs(p.knee.x - p.ankle.x) / p.torso : null;
+  })).filter((value): value is number => Number.isFinite(value));
+  const heelLift = sideVerticalPath(frames, (points) => points.heel);
+
+  let quality = gradeFromRatio(ratio, frames.length);
+  if (bottoms.length < 2 || depthRange < 0.025) quality = '測定不能';
+  else if (bottoms.length < 3 || depthRange < 0.04 || ratio < 0.7) quality = quality === 'A' ? 'B' : quality;
+
+  return {
+    taskId: capture.taskId,
+    label: capture.label,
+    quality,
+    highConfidenceRatio: ratio,
+    frameCount: frames.length,
+    durationSec,
+    metrics: [
+      buildMetric('side_used', '側面採用側', side),
+      buildMetric('bottom_count_detected', '推定ボトム回数', bottoms.length, 'count'),
+      buildMetric('bottom_times_sec', 'ボトム推定時刻', bottoms.map((time) => round(time, 2)).join(', '), 'sec'),
+      buildMetric('squat_depth_ratio', 'しゃがみ深さ', depthRange, 'ratio'),
+      buildMetric('squat_depth_torso_ratio', 'しゃがみ深さ/体幹長', normalizedDepth, 'ratio'),
+      buildMetric('trunk_lean_peak_deg', '体幹前傾ピーク', max(trunkLeanValues), 'deg'),
+      buildMetric('trunk_lean_p95_deg', '体幹前傾95パーセンタイル', percentile(trunkLeanValues, 0.95), 'deg'),
+      buildMetric('knee_angle_min_deg', '膝角度最小', kneeAngles.length ? min(kneeAngles) : null, 'deg'),
+      buildMetric('hip_angle_min_deg', '股関節角度最小', hipAngles.length ? min(hipAngles) : null, 'deg'),
+      buildMetric('ankle_angle_min_deg', '足関節角度最小', ankleAngles.length ? min(ankleAngles) : null, 'deg'),
+      buildMetric('knee_ankle_offset_peak_ratio', '膝-足首前後ずれピーク', max(kneeAnkleOffsets), 'ratio'),
+      buildMetric('hip_ankle_offset_peak_ratio', '股関節-足首前後ずれピーク', max(hipAnkleOffsets), 'ratio'),
+      buildMetric('sagittal_stack_error_peak_ratio', '矢状面スタック誤差ピーク', max(stackErrors), 'ratio'),
+      buildMetric('bottom_knee_angle_deg', 'ボトム膝角度平均', mean(bottomKneeAngles), 'deg'),
+      buildMetric('bottom_hip_angle_deg', 'ボトム股関節角度平均', mean(bottomHipAngles), 'deg'),
+      buildMetric('bottom_knee_ankle_offset_ratio', 'ボトム膝-足首前後ずれ', mean(bottomKneeAnkleOffsets), 'ratio'),
+      buildMetric('heel_lift_proxy', '踵上下移動', heelLift, 'ratio'),
     ],
     warnings,
   };
@@ -490,12 +717,13 @@ export function analyzeSession(captures: Partial<Record<TaskId, TaskCapture>>): 
     if (!capture) return [];
     if (task.id === 'sit_to_stand') return analyzeSitToStand(capture);
     if (task.id === 'squat') return analyzeSquat(capture);
+    if (task.id === 'side_squat') return analyzeSideSquat(capture);
     return analyzeStatic(capture);
   });
   const warnings = analyses.flatMap((analysis) => analysis.warnings.map((warning) => `${analysis.label}: ${warning}`));
   return {
     createdAt: new Date().toISOString(),
-    protocolVersion: 'posture_motion_lab_v0.1',
+    protocolVersion: PROTOCOL_VERSION,
     overallQuality: worstQuality(analyses.map((analysis) => analysis.quality)),
     analyses,
     warnings,

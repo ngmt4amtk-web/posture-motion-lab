@@ -27,12 +27,17 @@ function qualityLabel(value: number) {
 
 function liveVisibility(landmarks: PosePoint[] | null) {
   if (!landmarks) return 0;
-  const required = [0, 7, 8, 11, 12, 23, 24, 25, 26, 27, 28];
-  const visibleCount = required.filter((index) => {
-    const point = landmarks[index];
-    return point && (point.visibility == null || point.visibility >= 0.5);
-  }).length;
-  return visibleCount / required.length;
+  const score = (required: number[]) => {
+    const visibleCount = required.filter((index) => {
+      const point = landmarks[index];
+      return point && (point.visibility == null || point.visibility >= 0.5);
+    }).length;
+    return visibleCount / required.length;
+  };
+  const fullBody = score([0, 7, 8, 11, 12, 23, 24, 25, 26, 27, 28]);
+  const leftSide = score([7, 11, 23, 25, 27]);
+  const rightSide = score([8, 12, 24, 26, 28]);
+  return Math.max(fullBody, leftSide, rightSide);
 }
 
 function speechSupported() {
@@ -44,11 +49,12 @@ function taskStartSpeech(task: TaskDefinition) {
   if (task.id === 'side_static') return '側面静止、開始。横向きのまま、10秒間止まってください。';
   if (task.id === 'back_static') return '背面静止、開始。10秒間、足幅を変えずに立ってください。';
   if (task.id === 'sit_to_stand') return '立ち座り、開始。5回行い、終わったら立ったまま止まってください。';
+  if (task.id === 'side_squat') return '側面スクワット、開始。横向きのまま3回、同じ深さで行ってください。';
   return 'スクワット、開始。3回、同じ深さで行ってください。';
 }
 
 function taskVoiceCues(task: TaskDefinition, rhythmGuide: boolean): VoiceCue[] {
-  if (rhythmGuide && task.id === 'squat') {
+  if (rhythmGuide && (task.id === 'squat' || task.id === 'side_squat')) {
     return [
       { atSec: 3, text: '上がる' },
       { atSec: 6, text: '2回目、下がる' },
@@ -79,7 +85,7 @@ function taskVoiceCues(task: TaskDefinition, rhythmGuide: boolean): VoiceCue[] {
     ];
   }
 
-  if (task.id === 'squat') {
+  if (task.id === 'squat' || task.id === 'side_squat') {
     return [
       { atSec: 10, text: '3回です。回数をそろえてください' },
       { atSec: 20, text: '残り5秒' },
@@ -651,7 +657,7 @@ export default function App() {
       <section className="results">
         <div className="resultsHeader">
           <h2>測定値</h2>
-          <p>診断、スコア、処方は表示しません。数値と品質だけを残します。</p>
+          <p>診断、スコア、処方は表示しません。動画推薦に使えるよう、CVA、矢状面スタック、膝/股関節/足首プロキシ、動作中のばらつきを数値で残します。</p>
         </div>
         {exportPreview && (
           <article className="exportPreview">

@@ -1,4 +1,4 @@
-export type TaskId = 'front_static' | 'side_static' | 'back_static' | 'sit_to_stand' | 'squat';
+export type TaskId = 'front_static' | 'side_static' | 'back_static' | 'sit_to_stand' | 'squat' | 'side_squat';
 
 export type QualityGrade = 'A' | 'B' | 'C' | '測定不能';
 

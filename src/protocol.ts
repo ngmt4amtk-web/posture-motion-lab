@@ -1,6 +1,6 @@
 import type { TaskDefinition } from './types';
 
-export const PROTOCOL_VERSION = 'posture_motion_lab_v0.1';
+export const PROTOCOL_VERSION = 'posture_motion_lab_v0.2';
 
 export const TASKS: TaskDefinition[] = [
   {
@@ -73,6 +73,21 @@ export const TASKS: TaskDefinition[] = [
       '3秒くらいで下がり、3秒くらいで上がる。',
       '深くしゃがむ必要はない。毎回同じ深さを狙う。',
       '膝、足首、股関節が画面から外れたら測定品質が落ちる。',
+    ],
+  },
+  {
+    id: 'side_squat',
+    label: 'スクワット側面3回',
+    shortLabel: '側面スクワット',
+    durationSec: 25,
+    view: 'dynamic',
+    instruction: '横向きで、ゆっくり3回スクワットする。',
+    setup: 'カメラに対して真横を向き、耳、肩、股関節、膝、足首、つま先が見えるように固定する。',
+    steps: [
+      '左右どちら向きでもよいが、毎回同じ向きで測る。',
+      '腕で股関節が隠れる場合は、手を胸の前に置く。',
+      '3秒くらいで下がり、3秒くらいで上がる。',
+      '深さより、踵、膝、股関節、体幹が画面から外れないことを優先する。',
     ],
   },
 ];
